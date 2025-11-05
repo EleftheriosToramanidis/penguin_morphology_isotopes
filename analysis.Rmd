@@ -1,0 +1,208 @@
+---
+title: "Part 2 - Antarctic Penguin Data Processing and Exploration"
+output: html_document
+date: "2025-10-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Structure Diagnosis
+
+
+**Reading data and importing libraries**
+```{r, message=FALSE}
+library(tidyverse)
+library(dplyr)
+data<-read_csv("antarctic_penguins.csv")
+```
+
+**Variable Renaming**
+
+```{r}
+data <- data %>%
+  rename(sample_number = `Sample Number`, date_egg = `Date Egg`)
+```
+
+
+
+**Date Conversion**
+
+The Date Egg variable records the date when each penguin nest was first observed with one egg.Since penguin breeding typically occurs between September and November, the U.S. date format (MM/DD/YYYY) is the most suitable choice. Years incorrectly recorded as 0007, 0008, etc., are corrected to 2007, 2008, and so on.
+```{r}
+# Fix years like 0007 → 2007
+data <- data %>%
+  mutate(
+    date_egg = as.Date(date_egg, format = "%m/%d/%Y"),
+    date_egg = if_else(year(date_egg) < 2000,
+                       date_egg + years(2000),
+                       date_egg)
+  )
+
+```
+
+
+**Simplifying Species Names**
+
+The full species names include both the common and scientific names. Since the first two words uniquely identify each species, we retain only those for simplicity.
+
+```{r}
+data$Species <- sub(" \\(.*\\)", "", data$Species)
+```
+
+
+**Removing Unnecessary Columns**
+
+Some columns contain only a single value across all records (e.g., `Region`, `Stage`) and thus do not contribute analytical value. These, along with the Individual ID, are dropped to simplify the dataset.
+
+```{r}
+print(unique(data$Region))
+print(unique(data$Stage))
+```
+
+All samples are from the "Anvers" region and are at the “Adult, 1 Egg Stage”.
+
+```{r}
+data<-data %>% 
+  select(-Region, -Stage, -`Individual ID`)
+```
+
+It is observed that the year of each sample is tightly connected to the `studyName` variable. 
+
+```{r}
+data <- data %>%
+  mutate(year_egg = year(date_egg))
+
+# Check  what are the different years for each Study Name
+check_sample_years <- data %>%
+  group_by(studyName) %>%
+  summarise(year_range = paste(sort(unique(year_egg)), collapse = ", "),
+            n_records = n()) %>%
+  arrange(studyName)
+
+print(check_sample_years)
+```
+
+The first digits in each `studyName` correspond to the collection year. Since both `date_egg` and `year_egg` already capture this information, we drop `studyName` and the sequential sample_number.
+
+```{r}
+data<-data %>% 
+  select(-studyName, -sample_number)
+```
+
+**Removing Empty Records**
+
+A few rows correspond to unsampled penguins with missing measurement data. These are excluded from the dataset.
+
+```{r}
+data<-data %>% 
+  filter(!if_all(`Culmen Length (mm)`:`Delta 15 N (o/oo)`, is.na))
+```
+
+**Fixing Sex Column Anomalies**
+
+One sample contains a single dot "." instead of a valid sex value. This is replaced with NA for consistency.
+```{r}
+data<-data %>% 
+  mutate(Sex = na_if(Sex, "."))
+```
+
+**Estimating Missing Sex Values**
+
+In nature, males are typically larger than females. We use morphological features — culmen area, flipper length, and body mass — to estimate missing Sex values.
+
+The following code: 
+
+1. Calculates culmen area (length × depth).
+2. Computes mean measurements per species and sex.
+3. Imputes missing sex values by comparing proximity to male and female averages.
+4. Creates new imputed versions of Sex based on each predictor.
+
+```{r}
+data_imputed <- data %>%
+  # --- Compute derived measures ---
+  mutate(
+    culmen_area = `Culmen Length (mm)` * `Culmen Depth (mm)`
+  ) %>%
+  
+  # --- Calculate mean values for each predictor by Species and Sex ---
+  group_by(Species, Sex) %>%
+  mutate(
+    mean_area_by_species_sex    = mean(culmen_area, na.rm = TRUE),
+    mean_flipper_by_species_sex = mean(`Flipper Length (mm)`, na.rm = TRUE),
+    mean_mass_by_species_sex    = mean(`Body Mass (g)`, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  
+  # Impute Sex based on difference between flipper length, culmen area, body mass
+  group_by(Species) %>%
+  mutate(
+    imputed_sex_culmen = case_when(
+      is.na(Sex) & abs(culmen_area - mean_area_by_species_sex[Sex == "MALE"][1]) <abs(culmen_area - mean_area_by_species_sex[Sex == "FEMALE"][1]) ~ "MALE",
+      is.na(Sex) & abs(culmen_area - mean_area_by_species_sex[Sex == "FEMALE"][1]) <abs(culmen_area - mean_area_by_species_sex[Sex == "MALE"][1]) ~ "FEMALE",TRUE ~ Sex
+    ),
+    imputed_sex_flipper = case_when(
+      is.na(Sex) & abs(`Flipper Length (mm)` - mean_flipper_by_species_sex[Sex == "MALE"][1]) <abs(`Flipper Length (mm)` - mean_flipper_by_species_sex[Sex == "FEMALE"][1]) ~ "MALE",
+      is.na(Sex) & abs(`Flipper Length (mm)` - mean_flipper_by_species_sex[Sex == "FEMALE"][1]) <abs(`Flipper Length (mm)` - mean_flipper_by_species_sex[Sex == "MALE"][1]) ~"FEMALE",TRUE ~ Sex
+    ),
+    imputed_sex_mass = case_when(
+      is.na(Sex) & abs(`Body Mass (g)` - mean_mass_by_species_sex[Sex == "MALE"][1]) <abs(`Body Mass (g)` - mean_mass_by_species_sex[Sex == "FEMALE"][1]) ~ "MALE",
+      is.na(Sex) & abs(`Body Mass (g)` - mean_mass_by_species_sex[Sex == "FEMALE"][1]) <abs(`Body Mass (g)` - mean_mass_by_species_sex[Sex == "MALE"][1]) ~ "FEMALE",TRUE ~ Sex
+    )
+  )
+
+data_imputed %>% 
+  filter(is.na(Sex))
+
+```
+
+The imputation based on body mass is chosen as the most consistent predictor. The following code replaces missing values in the Sex column accordingly.
+```{r}
+data_imputed <- data_imputed %>%
+  mutate(
+    Sex = case_when(
+      is.na(Sex) ~ imputed_sex_mass,
+      TRUE ~ Sex
+    )
+  )
+data<- data_imputed %>% 
+  select(-c(mean_area_by_species_sex:imputed_sex_mass))
+```
+
+
+
+**Visual Validation**
+
+The following box plots provide a visual check of the sex-based morphological differences.
+
+```{r}
+ggplot(data_imputed, aes(x=culmen_area, fill = Sex)) +
+    geom_boxplot()
+
+ggplot(data_imputed, aes(x=`Flipper Length (mm)`, fill = Sex)) +
+    geom_boxplot()
+
+ggplot(data_imputed, aes(x=`Body Mass (g)`, fill = Sex)) +
+    geom_boxplot()
+```
+
+
+
+**Saving the Processed Dataset**
+
+```{r}
+write.csv(data, "peng_processed.csv", row.names = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
