@@ -9,9 +9,17 @@ This repository contains an end-to-end analysis and visualization of Antarctic p
 - **Years:** 2007–2009
 - **Species:** Adelie, Chinstrap, Gentoo
 
-<pre> 📂 Repository Structure ``` ├── data/ # Raw and processed datasets │ ├── antarctic_penguins.csv │ ├── peng_processed.csv │ ├── analysis.Rmd # R Markdown preprocessing and cleaning ├── analysis.html # Rendered HTML from R Markdown │ ├── tableau/ # Tableau workbook files │ └── penguins.twbx │ └── README.md ``` </pre>
-
-
+## 📁 Repository Structure
+```
+data/ # Raw and processed datasets
+├── antarctic_penguins.csv
+├── peng_processed.csv
+analysis/ # R Markdown preprocessing and cleaning
+├── analysis.Rmd
+└── analysis.html
+tableau/ # Tableau workbook
+└── penguin_dashboard.twbx
+```
 
 ## 🧠 Key Insights
 - Gentoo females show increasing body mass over years.
